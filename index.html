@@ -148,8 +148,10 @@
         const lines = text.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l; });
         const patients = [];
         
-        // Regex: "1. Name, 12 th/thn/tahun, 123456, dengan diagnosis"
-        const patientStartRegex = /^(\d+)\.\s+(.+?),\s*(\d+)\s*(?:th|thn|tahun)?\.?,\s*(\d+)\s*,?\s*dengan\s*(.+)/i;
+        // --- UPDATED REGEX ---
+        // Matches: "1. Name, 12 th/thn/tahun, RM123/123456, dengan diagnosis"
+        // Changed the 4th group to (.+?) to accept alphanumeric NoRMs like "RM RS luar"
+        const patientStartRegex = /^(\d+)\.\s+(.+?),\s*(\d+)\s*(?:th|thn|tahun)?\.?,\s*(.+?)\s*,?\s*dengan\s*(.+)/i;
         
         let globalDate = getGlobalDate(text);
         
@@ -186,8 +188,6 @@
                     jam: ""
                 };
                 patients.push(currentPatient);
-                
-                // We consumed this line as a patient header, move to next line
                 continue; 
             }
 
@@ -245,11 +245,9 @@
                             currentPatient.regio = potentialRegio;
                          }
                      }
-                     // This line is a detail line, so mark as consumed to prevent it acting as a header
                      lineConsumed = true;
                 }
                 else if (lowerLine.includes("pada") && !lowerLine.includes("pukul") && !lowerLine.startsWith("selanjutnya")) {
-                    // Generic "pada..." check, but avoid headers starting with Selanjutnya
                      const padaSplit = line.split("pada");
                      if (padaSplit.length > 1) {
                          const potentialRegio = padaSplit[1].trim();
@@ -260,16 +258,14 @@
                      lineConsumed = true;
                 }
                 
-                // Explicit location override
+                // Location override within patient detail
                 else if (lowerLine.includes("lokasi:")) {
                      const locParts = line.split(":");
                      if (locParts.length > 1) currentPatient.lokasi = locParts[1].trim();
                      lineConsumed = true;
                 }
                 
-                // Guard: If line starts with "Rencana" but didn't match time/regio above,
-                // it's likely just a descriptive line, NOT a section header.
-                // We consume it to protect the Global Location State.
+                // Ignore descriptive "Rencana..." lines so they don't trigger headers
                 else if (lowerLine.startsWith("rencana")) {
                     lineConsumed = true;
                 }
@@ -278,10 +274,19 @@
             if (lineConsumed) continue;
 
             // =========================================================
-            // PRIORITY 3: DETECT SECTION HEADERS (Global Context)
+            // PRIORITY 3: DETECT SECTION HEADERS
             // =========================================================
-            // Only runs if the line wasn't a Patient Start or a Patient Detail
             
+            // Helper function to determine location based on keywords
+            function detectLocation(text, defaultLoc) {
+                if (text.includes("dahlia")) return "Dahlia";
+                if (text.includes("radiologi")) return "Radiologi";
+                if (text.includes("icc")) return "ICC";
+                if (text.includes("pjt")) return "PJT lt.4";
+                if (text.includes("picu")) return "PICU";
+                return defaultLoc;
+            }
+
             if (lowerLine.includes("frozen section")) {
                 currentType = "Frozen";
                 currentLocation = "GBST";
@@ -295,7 +300,13 @@
             else if (lowerLine.includes("rose pendampingan bronkoskopi")) {
                 currentType = "ROSE";
                 currentRoseDetail = "Bronkoskopi";
-                currentLocation = lowerLine.includes("pjt") ? "PJT lt.4" : "PJT lt.4";
+                currentLocation = detectLocation(lowerLine, "PJT lt.4");
+            }
+            // New Block: ROSE Pendampingan BAJAH (Specific)
+            else if (lowerLine.includes("rose") && lowerLine.includes("bajah")) {
+                currentType = "ROSE";
+                currentRoseDetail = "BAJAH";
+                currentLocation = detectLocation(lowerLine, "Dahlia"); // Defaults to Dahlia if mentioned, or checks others
             }
             else if (lowerLine.includes("biopsi ginjal")) {
                 currentType = "ROSE";
@@ -305,14 +316,7 @@
             else if (lowerLine.includes("bajah")) {
                 currentType = "BAJAH";
                 currentRoseDetail = "";
-                
-                if (lowerLine.includes("radiologi")) {
-                    currentLocation = "Radiologi";
-                } else if (lowerLine.includes("icc")) {
-                    currentLocation = "ICC";
-                } else {
-                    currentLocation = "ICC"; // Default fallback
-                }
+                currentLocation = detectLocation(lowerLine, "ICC"); // Default fallback to ICC
             }
         }
 
