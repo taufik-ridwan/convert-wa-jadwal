@@ -148,8 +148,7 @@
         const lines = text.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l; });
         const patients = [];
         
-        // --- REGEX ---
-        // Matches: "1. Name, 12 th/thn/tahun, 123456, dengan diagnosis"
+        // Regex: "1. Name, 12 th/thn/tahun, 123456, dengan diagnosis"
         const patientStartRegex = /^(\d+)\.\s+(.+?),\s*(\d+)\s*(?:th|thn|tahun)?\.?,\s*(\d+)\s*,?\s*dengan\s*(.+)/i;
         
         let globalDate = getGlobalDate(text);
@@ -165,7 +164,124 @@
             const line = lines[i];
             const lowerLine = line.toLowerCase();
 
-            // 1. Detect Section Headers
+            // =========================================================
+            // PRIORITY 1: DETECT PATIENT START
+            // =========================================================
+            const patientMatch = line.match(patientStartRegex);
+            if (patientMatch) {
+                currentPatient = {
+                    id: Date.now() + Math.random(), 
+                    nama: patientMatch[2].trim(),
+                    usia: patientMatch[3].trim(),
+                    norm: patientMatch[4].trim(),
+                    diagnosis: patientMatch[5].trim(),
+                    tindakan: currentType,
+                    rose_detail: currentRoseDetail,
+                    regio: "", 
+                    konsulen: "",
+                    lokasi: currentLocation,
+                    senior: "",
+                    asisten: "",
+                    tanggal: globalDate,
+                    jam: ""
+                };
+                patients.push(currentPatient);
+                
+                // We consumed this line as a patient header, move to next line
+                continue; 
+            }
+
+            // =========================================================
+            // PRIORITY 2: DETECT DETAILS (If inside a patient block)
+            // =========================================================
+            let lineConsumed = false;
+            
+            if (currentPatient) {
+                // Time (Pukul)
+                if (lowerLine.includes("pukul")) {
+                    const timeMatch = line.match(/(\d{2}[.:]\d{2})/);
+                    if (timeMatch) {
+                        currentPatient.jam = timeMatch[1].replace('.', ':');
+                    }
+                    lineConsumed = true;
+                }
+                
+                // Acc / Konsulen
+                else if (lowerLine.includes("acc ") || lowerLine.startsWith("acc")) {
+                    if (lowerLine.includes("acc")) {
+                         let docName = line.replace(/^(Menunggu)?\s*acc(\s+by\s+name)?\s*[:]?\s*/i, "").trim();
+                         if (docName) currentPatient.konsulen = docName;
+                    }
+                    lineConsumed = true;
+                }
+
+                // Senior
+                else if (lowerLine.startsWith("senior")) {
+                    const parts = line.split(":");
+                    if (parts.length > 1) currentPatient.senior = parts[1].trim();
+                    lineConsumed = true;
+                }
+
+                // Asisten
+                else if (lowerLine.startsWith("asisten")) {
+                    const parts = line.split(":");
+                    if (parts.length > 1) currentPatient.asisten = parts[1].trim();
+                    lineConsumed = true;
+                }
+
+                // Regio
+                else if (lowerLine.includes("regio")) {
+                    const regioMatch = line.match(/regio\s+(.*)/i);
+                    if (regioMatch) {
+                        currentPatient.regio = "regio " + regioMatch[1].trim();
+                    }
+                    lineConsumed = true;
+                }
+                else if (lowerLine.includes("rencana bajah") && lowerLine.includes("pada")) {
+                     const padaSplit = line.split("pada");
+                     if (padaSplit.length > 1) {
+                         const potentialRegio = padaSplit[1].trim();
+                         if (!potentialRegio.toLowerCase().startsWith("pukul")) {
+                            currentPatient.regio = potentialRegio;
+                         }
+                     }
+                     // This line is a detail line, so mark as consumed to prevent it acting as a header
+                     lineConsumed = true;
+                }
+                else if (lowerLine.includes("pada") && !lowerLine.includes("pukul") && !lowerLine.startsWith("selanjutnya")) {
+                    // Generic "pada..." check, but avoid headers starting with Selanjutnya
+                     const padaSplit = line.split("pada");
+                     if (padaSplit.length > 1) {
+                         const potentialRegio = padaSplit[1].trim();
+                         if (potentialRegio.length > 2 && !potentialRegio.toLowerCase().startsWith("pukul")) {
+                             currentPatient.regio = potentialRegio;
+                         }
+                     }
+                     lineConsumed = true;
+                }
+                
+                // Explicit location override
+                else if (lowerLine.includes("lokasi:")) {
+                     const locParts = line.split(":");
+                     if (locParts.length > 1) currentPatient.lokasi = locParts[1].trim();
+                     lineConsumed = true;
+                }
+                
+                // Guard: If line starts with "Rencana" but didn't match time/regio above,
+                // it's likely just a descriptive line, NOT a section header.
+                // We consume it to protect the Global Location State.
+                else if (lowerLine.startsWith("rencana")) {
+                    lineConsumed = true;
+                }
+            }
+
+            if (lineConsumed) continue;
+
+            // =========================================================
+            // PRIORITY 3: DETECT SECTION HEADERS (Global Context)
+            // =========================================================
+            // Only runs if the line wasn't a Patient Start or a Patient Detail
+            
             if (lowerLine.includes("frozen section")) {
                 currentType = "Frozen";
                 currentLocation = "GBST";
@@ -190,96 +306,12 @@
                 currentType = "BAJAH";
                 currentRoseDetail = "";
                 
-                // --- Location Logic for BAJAH ---
-                // If text contains "radiologi" (e.g. "radiologi lantai 1"), set as Radiologi.
-                // Otherwise check for ICC, or default to ICC.
                 if (lowerLine.includes("radiologi")) {
                     currentLocation = "Radiologi";
                 } else if (lowerLine.includes("icc")) {
                     currentLocation = "ICC";
                 } else {
-                    currentLocation = "ICC"; // Fallback default
-                }
-            }
-
-            // 2. Detect Patient Start
-            const patientMatch = line.match(patientStartRegex);
-            if (patientMatch) {
-                currentPatient = {
-                    id: Date.now() + Math.random(), 
-                    nama: patientMatch[2].trim(),
-                    usia: patientMatch[3].trim(),
-                    norm: patientMatch[4].trim(),
-                    diagnosis: patientMatch[5].trim(),
-                    tindakan: currentType,
-                    rose_detail: currentRoseDetail,
-                    regio: "", 
-                    konsulen: "",
-                    lokasi: currentLocation,
-                    senior: "",
-                    asisten: "",
-                    tanggal: globalDate,
-                    jam: ""
-                };
-                patients.push(currentPatient);
-                continue;
-            }
-
-            // 3. Detect Details for current patient
-            if (currentPatient) {
-                // Time (Pukul)
-                if (lowerLine.includes("pukul")) {
-                    const timeMatch = line.match(/(\d{2}[.:]\d{2})/);
-                    if (timeMatch) {
-                        currentPatient.jam = timeMatch[1].replace('.', ':');
-                    }
-                }
-                
-                // Acc / Konsulen
-                if (lowerLine.includes("acc ") || lowerLine.startsWith("acc")) {
-                    // Removes "Menunggu", "Acc", "by name" and colons
-                    if (lowerLine.includes("acc")) {
-                         // Remove prefixes to get the name
-                         let docName = line.replace(/^(Menunggu)?\s*acc(\s+by\s+name)?\s*[:]?\s*/i, "").trim();
-                         // Safety check: ensure we didn't wipe the whole line if format is weird
-                         if (docName) currentPatient.konsulen = docName;
-                    }
-                }
-
-                // Senior
-                if (lowerLine.startsWith("senior")) {
-                    const parts = line.split(":");
-                    if (parts.length > 1) currentPatient.senior = parts[1].trim();
-                }
-
-                // Asisten
-                if (lowerLine.startsWith("asisten")) {
-                    const parts = line.split(":");
-                    if (parts.length > 1) currentPatient.asisten = parts[1].trim();
-                }
-
-                // Regio detection
-                if (lowerLine.includes("regio")) {
-                    const regioMatch = line.match(/regio\s+(.*)/i);
-                    if (regioMatch) {
-                        currentPatient.regio = "regio " + regioMatch[1].trim();
-                    }
-                }
-                else if (lowerLine.includes("rencana bajah") && lowerLine.includes("pada")) {
-                     const padaSplit = line.split("pada");
-                     if (padaSplit.length > 1) {
-                         const potentialRegio = padaSplit[1].trim();
-                         // Avoid capturing time as regio
-                         if (!potentialRegio.toLowerCase().startsWith("pukul")) {
-                            currentPatient.regio = potentialRegio;
-                         }
-                     }
-                }
-                
-                // Explicit location override (rare)
-                if (lowerLine.includes("lokasi:")) {
-                     const locParts = line.split(":");
-                     if (locParts.length > 1) currentPatient.lokasi = locParts[1].trim();
+                    currentLocation = "ICC"; // Default fallback
                 }
             }
         }
