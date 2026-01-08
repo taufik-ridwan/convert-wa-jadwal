@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp to .jadwal Converter</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { color: #2c3e50; text-align: center; }
+        .container {
+            background: white;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        textarea {
+            width: 100%;
+            height: 300px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-family: monospace;
+            box-sizing: border-box; 
+            resize: vertical;
+        }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        #btn-convert { background-color: #3498db; color: white; }
+        #btn-convert:hover { background-color: #2980b9; }
+        #btn-download { background-color: #27ae60; color: white; display: none; }
+        #btn-download:hover { background-color: #219150; }
+        #preview-container { margin-top: 20px; display: none; }
+        pre {
+            background: #2d3436;
+            color: #dfe6e9;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .error { color: #e74c3c; margin-top: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Jadwal Converter</h1>
+    <p>Paste the WhatsApp text below:</p>
+    <textarea id="input-text" placeholder="Paste text here... (Selamat malam Mas dan Mbak...)"></textarea>
+    
+    <div class="controls">
+        <button id="btn-convert">Convert to JSON</button>
+        <button id="btn-download">Download .jadwal</button>
+    </div>
+
+    <div id="error-msg" class="error"></div>
+
+    <div id="preview-container">
+        <h3>Preview Output:</h3>
+        <pre id="output-preview"></pre>
+    </div>
+</div>
+
+<script>
+    let finalJsonData = null;
+
+    document.addEventListener('DOMContentLoaded', function() {
+        document.getElementById('btn-convert').addEventListener('click', handleConvert);
+        document.getElementById('btn-download').addEventListener('click', handleDownload);
+    });
+
+    function handleConvert() {
+        const text = document.getElementById('input-text').value;
+        const errorDiv = document.getElementById('error-msg');
+        const previewContainer = document.getElementById('preview-container');
+        const downloadBtn = document.getElementById('btn-download');
+        
+        errorDiv.textContent = '';
+        finalJsonData = null;
+
+        if (!text.trim()) {
+            errorDiv.textContent = "Please paste some text first.";
+            return;
+        }
+
+        try {
+            const result = parseWhatsappText(text);
+            
+            if (result.length === 0) {
+                errorDiv.textContent = "No patients found. Please check the text format.";
+                return;
+            }
+
+            finalJsonData = JSON.stringify(result, null, 2);
+            
+            document.getElementById('output-preview').textContent = finalJsonData;
+            previewContainer.style.display = 'block';
+            downloadBtn.style.display = 'block';
+        } catch (e) {
+            console.error(e);
+            errorDiv.textContent = "Error parsing text: " + e.message;
+        }
+    }
+
+    function handleDownload() {
+        if (!finalJsonData) return;
+
+        const blob = new Blob([finalJsonData], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        
+        let filename = 'data.jadwal';
+        try {
+            const data = JSON.parse(finalJsonData);
+            if (data.length > 0 && data[0].tanggal) {
+                filename = `jadwal_${data[0].tanggal}.jadwal`;
+            }
+        } catch(e) {}
+
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function parseWhatsappText(text) {
+        const lines = text.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l; });
+        const patients = [];
+        
+        // --- UPDATED REGEX ---
+        // Matches: "1. Name, 12 th/thn/tahun, 123456, dengan diagnosis"
+        // (?:th|thn|tahun) matches any of those variations
+        const patientStartRegex = /^(\d+)\.\s+(.+?),\s*(\d+)\s*(?:th|thn|tahun)?\.?,\s*(\d+)\s*,?\s*dengan\s*(.+)/i;
+        
+        let globalDate = getGlobalDate(text);
+        
+        // Context variables
+        let currentType = ""; 
+        let currentLocation = "";
+        let currentRoseDetail = "";
+        
+        let currentPatient = null;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            const lowerLine = line.toLowerCase();
+
+            // 1. Detect Section Headers
+            if (lowerLine.includes("frozen section")) {
+                currentType = "Frozen";
+                currentLocation = "GBST";
+                currentRoseDetail = "";
+            } 
+            else if (lowerLine.includes("rose pendampingan msct")) {
+                currentType = "ROSE";
+                currentLocation = "Radiologi";
+                currentRoseDetail = "MSCT Scan";
+            }
+            else if (lowerLine.includes("rose pendampingan bronkoskopi")) {
+                currentType = "ROSE";
+                currentRoseDetail = "Bronkoskopi";
+                currentLocation = lowerLine.includes("pjt") ? "PJT lt.4" : "PJT lt.4";
+            }
+            else if (lowerLine.includes("biopsi ginjal")) {
+                currentType = "ROSE";
+                currentRoseDetail = "Biopsi Ginjal";
+                currentLocation = "PICU"; 
+            }
+            else if (lowerLine.includes("bajah")) {
+                currentType = "BAJAH";
+                currentRoseDetail = "";
+                if (lowerLine.includes("icc")) currentLocation = "ICC";
+                else if (lowerLine.includes("radiologi")) currentLocation = "Radiologi";
+                else currentLocation = "ICC"; 
+            }
+
+            // 2. Detect Patient Start
+            const patientMatch = line.match(patientStartRegex);
+            if (patientMatch) {
+                currentPatient = {
+                    id: Date.now() + Math.random(), 
+                    nama: patientMatch[2].trim(),
+                    usia: patientMatch[3].trim(),
+                    norm: patientMatch[4].trim(),
+                    diagnosis: patientMatch[5].trim(),
+                    tindakan: currentType,
+                    rose_detail: currentRoseDetail,
+                    regio: "", 
+                    konsulen: "",
+                    lokasi: currentLocation,
+                    senior: "",
+                    asisten: "",
+                    tanggal: globalDate,
+                    jam: ""
+                };
+                patients.push(currentPatient);
+                continue;
+            }
+
+            // 3. Detect Details for current patient
+            if (currentPatient) {
+                // Time (Pukul)
+                if (lowerLine.includes("pukul")) {
+                    const timeMatch = line.match(/(\d{2}[.:]\d{2})/);
+                    if (timeMatch) {
+                        currentPatient.jam = timeMatch[1].replace('.', ':');
+                    }
+                }
+                
+                // Acc / Konsulen (Handled "Menunggu acc" and "Acc")
+                if (lowerLine.includes("acc ")) {
+                    // This regex removes "Menunggu", "Acc", "by name" and colons
+                    // Looks for lines starting with "Acc" or "Menunggu Acc"
+                    if (lowerLine.startsWith("acc") || lowerLine.startsWith("menunggu acc")) {
+                         let docName = line.replace(/^(Menunggu)?\s*acc(\s+by\s+name)?\s*[:]?\s*/i, "").trim();
+                         currentPatient.konsulen = docName;
+                    }
+                }
+
+                // Senior
+                if (lowerLine.startsWith("senior")) {
+                    const parts = line.split(":");
+                    if (parts.length > 1) currentPatient.senior = parts[1].trim();
+                }
+
+                // Asisten
+                if (lowerLine.startsWith("asisten")) {
+                    const parts = line.split(":");
+                    if (parts.length > 1) currentPatient.asisten = parts[1].trim();
+                }
+
+                // Regio
+                if (lowerLine.includes("regio")) {
+                    const regioMatch = line.match(/regio\s+(.*)/i);
+                    if (regioMatch) {
+                        currentPatient.regio = "regio " + regioMatch[1].trim();
+                    }
+                }
+                else if (lowerLine.includes("rencana bajah") && lowerLine.includes("pada")) {
+                     const padaSplit = line.split("pada");
+                     if (padaSplit.length > 1) {
+                         currentPatient.regio = padaSplit[1].trim();
+                     }
+                }
+                // Catch "pada colli bilateral" which doesn't use the word regio
+                else if (lowerLine.includes("pada") && !lowerLine.includes("pukul")) {
+                    const padaSplit = line.split("pada");
+                     if (padaSplit.length > 1) {
+                         // Check if empty, sometimes people write "pada pukul"
+                         const potentialRegio = padaSplit[1].trim();
+                         if (!potentialRegio.toLowerCase().startsWith("pukul")) {
+                             currentPatient.regio = potentialRegio;
+                         }
+                     }
+                }
+                
+                // Explicit location override
+                if (lowerLine.includes("lokasi:")) {
+                     const locParts = line.split(":");
+                     if (locParts.length > 1) currentPatient.lokasi = locParts[1].trim();
+                }
+            }
+        }
+
+        return patients;
+    }
+
+    function getGlobalDate(text) {
+        const months = {
+            'januari': '01', 'februari': '02', 'maret': '03', 'april': '04',
+            'mei': '05', 'juni': '06', 'juli': '07', 'agustus': '08',
+            'september': '09', 'oktober': '10', 'november': '11', 'desember': '12'
+        };
+
+        const dateRegex = /(\d{1,2})\s+(Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember)\s+(\d{4})/i;
+        const match = text.match(dateRegex);
+
+        if (match) {
+            let day = match[1].padStart(2, '0');
+            let monthStr = match[2].toLowerCase();
+            let year = match[3];
+            let month = months[monthStr];
+            return year + '-' + month + '-' + day;
+        }
+        
+        const today = new Date();
+        return today.toISOString().split('T')[0];
+    }
+</script>
+
+</body>
+</html>
